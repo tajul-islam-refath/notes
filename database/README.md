@@ -413,3 +413,69 @@ CREATE INDEX idx_places_location_gist ON places USING gist(location);
 ```sql
 EXPLAIN ANALYZE SELECT * FROM users WHERE email = 'abc@example.com';
 ```
+
+# “B-Tree index কীভাবে বুঝে abc@example.com কোন branch এ যাবে? এর জন্য value calculate করে কীভাবে tree traverse হয়?”
+
+## Index এ value কিভাবে store হয়
+
+* PostgreSQL যখন CREATE INDEX করে, তখন প্রতিটি indexed column এর actual value sorted order এ B-Tree তে রাখে।
+
+* Text column হলে (যেমন email), DB সেই string কে lexicographical order (dictionary order) এ রাখে।
+
+    abc@example.com < bob@example.com কারণ string comparison এ 'a' < 'b'।
+
+    👉 অর্থাৎ Index lookup করার সময় string compare হয় character by character।
+
+## Traversal কিভাবে হয়
+
+B-Tree traversal এ:
+
+1. Root node থেকে শুরু হয়।
+
+2. DB compare করে search value vs node key।
+
+* যদি abc@example.com < carol@example.com → left branch যাবে।
+
+* যদি > হয় → right branch যাবে।
+
+এইভাবে leaf node পর্যন্ত নামে।
+
+Leaf node এ pointer থাকে → আসল table row এ গিয়ে data fetch করে।
+
+## Example (Step by Step)
+
+```sql
+B-Tree Index (sorted by email)
+-------------------------------------------------
+(root)
+          [bob@example.com]
+          /               \
+ [abc@example.com]     [carol@example.com, dave@...]
+
+```
+### Search: 'abc@example.com'
+
+* Root এ compare → 'abc@example.com' < 'bob@example.com'
+
+* তাই Left branch নেয়।
+
+* Leaf node এ 'abc@example.com' পেয়ে যায়।
+
+* Leaf node → Row pointer → users টেবিলে আসল row fetch।
+
+## Under the Hood – Value Calculation
+
+তুমি যেটা নিয়ে curious সেটা হল value compare কিভাবে হয়?
+
+PostgreSQL internally প্রতিটি data type এর জন্য একটা comparison function define করে, যেটা বলে দেয়:
+
+* a < b, a = b, বা a > b
+
+* Text এর ক্ষেত্রে এটা basically binary/lexicographic comparison।
+
+### তারপর EXPLAIN ANALYZE দিয়ে দেখব কিভাবে B-Tree traverse হচ্ছে।
+
+```sql
+EXPLAIN ANALYZE 
+SELECT * FROM users WHERE email = 'abc@example.com';
+```
