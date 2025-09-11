@@ -479,3 +479,121 @@ PostgreSQL internally প্রতিটি data type এর জন্য এক
 EXPLAIN ANALYZE 
 SELECT * FROM users WHERE email = 'abc@example.com';
 ```
+
+# Query Optimization
+Query লিখার সময় আমরা Query Optimize ভাবে লিখলে আমরা Query Execution Time কমাতে পারবো। কিছু উদাহরণ,
+
+* নির্দিষ্ট ফিল্ড (যেমন, SELECT name, username FROM users) সিলেক্ট করা SELECT এর পরিবর্তে।
+* SELECT DISTINCT সম্ভব হলে avoid করা।
+* WHERE ব্যবহার করা HAVING এর পরিবর্তে।
+* LIMIT ব্যবহার করা।
+* INNER JOIN ব্যবহার করা।
+* Number of Sub-queries কমানো।
+* Complex Query এর জন্য Stored Procedure ব্যবহার করা। এতে করে আমরা Network Traffic কমাতে পারি।
+* WHERE clause এর ভিতর Scaler Function ব্যবহার না করা। WHERE clause এর ভিতর 
+ Scaler Function ব্যবহার করলে Query Optimizer, Index কে ব্যবহার করতে পারে না।
+* Normalize অথবা Denormalize অনুযায়ী Schema Design করা।
+* n+1 query execute না করা।
+
+## Interview Questions & Answers
+
+1. How do you find slow queries in PostgreSQL?
+* Use pg_stat_statements or enable query logging.
+
+2. What’s the difference between Index Scan and Seq Scan?
+* Seq Scan → পুরো টেবিল scan হয়।
+* Index Scan → index ব্যবহার করে direct row এ jump করে।
+
+3. Why should we avoid SELECT * ?
+* কারণ এটি extra I/O করে এবং planner unnecessary columns load করে।
+
+4. How does VACUUM help in optimization?
+* Dead rows clean করে, bloated table ঠিক করে, এবং index efficiency বাড়ায়।
+
+5. When would you use a materialized view?
+* যখন complex query বারবার run করতে হয় এবং dataset static বা কম change হয়।
+
+## ⚙️ PostgreSQL Execution Plan Decision Process
+```sql
+Query: SELECT * FROM posts WHERE title = 'PostgreSQL Index Basics';
+
+               ┌───────────────────────┐
+               │   Query Planner       │
+               └─────────┬─────────────┘
+                         │
+         ┌───────────────┴─────────────────┐
+         │ Check Available Indexes         │
+         └─────────────────────────────────┘
+                         │
+         ┌───────────────┴─────────────────┐
+         │ Estimate Cost of Seq Scan       │
+         │   - Full table scan             │
+         │   - Cost ≈ #rows in table       │
+         └───────────────┬─────────────────┘
+                         │
+         ┌───────────────┴─────────────────┐
+         │ Estimate Cost of Index Scan     │
+         │   - Use B-Tree / GIN / GiST     │
+         │   - Jump directly to row(s)     │
+         │   - Cost ≈ log(n) + few rows    │
+         └───────────────┬─────────────────┘
+                         │
+        ┌────────────────┴─────────────────┐
+        │ Choose Lower Cost Option         │
+        └────────────────┬─────────────────┘
+                         │
+        ┌────────────────┴─────────────────┐
+        │ If Table Small → Seq Scan        │
+        │ If Table Large + Index Present → │
+        │ Index Scan                       │
+        └────────────────┬─────────────────┘
+                         │
+                ┌────────┴────────┐
+                │ Execution Plan  │
+                └─────────────────┘
+
+```
+
+Planner সবসময় cost-based decision নেয়।
+
+## 🔎 Problem Statement
+
+👉 যদি তুমি WHERE clause এর মধ্যে scalar function (যেমন: LOWER(), UPPER(), DATE(), CAST(), COALESCE() ইত্যাদি) ব্যবহার করো, তখন PostgreSQL query planner সাধারণত index ব্যবহার করতে পারে না।
+
+### কেন Index ব্যবহার করতে পারে না?
+
+Index মূলত raw stored value এর উপর কাজ করে।
+কিন্তু তুমি যদি WHERE clause এ scalar function দাও, তাহলে DB কে প্রতিটা row-এর column value বের করে function apply করতে হয় → তাই index bypass হয়।
+
+## কিভাবে Optimize করা যায়?
+✅ Option 1: Expression Index (Functional Index)
+
+PostgreSQL এ তুমি চাইলে function এর উপর index তৈরি করতে পারো।
+```sql
+CREATE INDEX idx_users_email_lower 
+ON users (LOWER(email));
+
+SELECT * FROM users
+WHERE LOWER(email) = 'abc@example.com';
+```
+
+✅ Option 2: Data Normalize করা
+
+Email এর মতো fields সবসময় lowercase করে রাখো।
+
+```sql
+INSERT INTO users (email) VALUES (LOWER('ABC@Example.com'));
+```
+
+## n+1 query execute না করা।
+
+👉 N+1 query problem হয় যখন:
+
+তুমি প্রথমে একটা parent table থেকে data fetch করো (১টা query)।
+
+তারপর প্রতিটি parent record এর জন্য আলাদা করে child table থেকে data fetch করো (N টা query)।
+
+* ফলে মোট query হয় N+1।
+
+### How do you solve N+1 in SQL?
+✅ JOIN বা subquery দিয়ে সব data একসাথে আনতে হবে।
